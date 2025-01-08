@@ -11,6 +11,7 @@
 #include <sstream>
 #include <iomanip>
 #include <chrono>
+#include <map>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -170,6 +171,14 @@ public:
     }
 };
 
+class Player {
+public:
+    std::string name;
+    int setsFound;
+
+    Player(const std::string& playerName) : name(playerName), setsFound(0) {}
+};
+
 class SetGame {
 private:
     std::vector<Card> board;
@@ -178,6 +187,25 @@ private:
     GameStats stats;
     bool showHint;
     std::array<int, 3> hintSet;
+    
+    // New player management
+    std::vector<Player> players;
+    int currentPlayerIndex;
+
+    // New method to track sets on board
+    int calculateSetsOnBoard() const {
+        int setCount = 0;
+        for (size_t i = 0; i < board.size(); i++) {
+            for (size_t j = i + 1; j < board.size(); j++) {
+                for (size_t k = j + 1; k < board.size(); k++) {
+                    if (isSetPrivate(board[i], board[j], board[k])) {
+                        setCount++;
+                    }
+                }
+            }
+        }
+        return setCount;
+    }
 
     bool isSetPrivate(const Card& c1, const Card& c2, const Card& c3) const {
         bool shapeValid = ((c1.shape + c2.shape + c3.shape) % 3 == 0);
@@ -188,10 +216,47 @@ private:
     }
 
 public:
-    SetGame() : editMode(false), showHint(false) {
+    SetGame() : 
+        editMode(false), 
+        showHint(false), 
+        currentPlayerIndex(-1) 
+    {
         initializeDeck();
         dealCards(12);
         hintSet = {-1, -1, -1};
+    }
+
+    // New player management methods
+    void addPlayer(const std::string& name) {
+        players.emplace_back(name);
+        if (currentPlayerIndex == -1) {
+            currentPlayerIndex = 0;
+        }
+    }
+
+    void removePlayer(int index) {
+        if (index >= 0 && index < players.size()) {
+            players.erase(players.begin() + index);
+            if (players.empty()) {
+                currentPlayerIndex = -1;
+            } else if (currentPlayerIndex >= players.size()) {
+                currentPlayerIndex = players.size() - 1;
+            }
+        }
+    }
+
+    void assignSetToCurrentPlayer() {
+        if (currentPlayerIndex >= 0 && currentPlayerIndex < players.size()) {
+            players[currentPlayerIndex].setsFound++;
+        }
+    }
+
+    const std::vector<Player>& getPlayers() const { return players; }
+    int getCurrentPlayerIndex() const { return currentPlayerIndex; }
+    void cycleToNextPlayer() {
+        if (!players.empty()) {
+            currentPlayerIndex = (currentPlayerIndex + 1) % players.size();
+        }
     }
 
     void toggleEditMode() { editMode = !editMode; }
@@ -261,6 +326,10 @@ public:
     
     const GameStats& getStats() const { return stats; }
 
+    int getSetsOnBoard() const {
+        return calculateSetsOnBoard();
+    }
+
     void removeSet(const std::array<int, 3>& indices) {
         std::vector<Card> newBoard;
         for (size_t i = 0; i < board.size(); i++) {
@@ -272,6 +341,11 @@ public:
         dealCards(3);
         stats.setsFound++;
         showHint = false;  // Clear hint when a set is removed
+        
+        // Assign set to current player
+        assignSetToCurrentPlayer();
+        // Cycle to next player
+        cycleToNextPlayer();
     }
 
     void toggleHint() {
@@ -302,9 +376,10 @@ int main() {
         return -1;
     }
 
+    // 4K resolution support
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
-    GLFWwindow* window = glfwCreateWindow(1280, 720, "SET Game Solver", NULL, NULL);
+    GLFWwindow* window = glfwCreateWindow(3840, 2160, "SET Game Solver", NULL, NULL);
     if (!window) {
         std::cerr << "Failed to create GLFW window" << std::endl;
         glfwTerminate();
@@ -320,6 +395,11 @@ int main() {
 
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 130");
+
+    // Zoom and scaling support
+    float globalScale = 1.5f;
+    bool showPlayerManager = false;
+    char playerNameBuffer[256] = "";
 
     TextureManager textureManager;
     if (!textureManager.loadTexture("cards.png")) {
@@ -347,12 +427,85 @@ int main() {
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
 
+        // Apply global scaling
+        ImGui::GetIO().FontGlobalScale = globalScale;
+
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        ImGui::SetNextWindowSize(ImVec2(1000, 800), ImGuiCond_FirstUseEver);
-        ImGui::Begin("SET Game Solver");
+        ImGui::SetNextWindowSize(ImVec2(1600 * globalScale, 1200 * globalScale), ImGuiCond_FirstUseEver);
+        ImGui::Begin("SET Game Solver", nullptr, ImGuiWindowFlags_MenuBar);
+
+        // Menu bar
+        if (ImGui::BeginMenuBar()) {
+            if (ImGui::BeginMenu("Game")) {
+                if (ImGui::MenuItem("New Game")) {
+                    game = SetGame();
+                    currentSets.clear();
+                    selectedCardIndex = -1;
+                    selectedCards.clear();
+                }
+                ImGui::EndMenu();
+            }
+
+            if (ImGui::BeginMenu("View")) {
+                ImGui::SliderFloat("Zoom", &globalScale, 0.5f, 3.0f, "%.1f");
+                ImGui::EndMenu();
+            }
+
+            if (ImGui::BeginMenu("Players")) {
+                if (ImGui::MenuItem("Manage Players")) {
+                    showPlayerManager = true;
+                }
+                ImGui::EndMenu();
+            }
+
+            ImGui::EndMenuBar();
+        }
+
+        // Player management popup
+        if (showPlayerManager) {
+            ImGui::OpenPopup("Player Manager");
+        }
+
+        if (ImGui::BeginPopupModal("Player Manager", &showPlayerManager)) {
+            // Add new player
+            ImGui::InputText("Player Name", playerNameBuffer, IM_ARRAYSIZE(playerNameBuffer));
+            ImGui::SameLine();
+            if (ImGui::Button("Add Player") && strlen(playerNameBuffer) > 0) {
+                game.addPlayer(playerNameBuffer);
+                memset(playerNameBuffer, 0, sizeof(playerNameBuffer));
+            }
+
+            // Display current players
+            ImGui::Separator();
+            ImGui::Text("Current Players:");
+            const auto& players = game.getPlayers();
+            for (size_t i = 0; i < players.size(); ++i) {
+                ImGui::PushID(i);
+                ImGui::Text("%s (Sets: %d)", players[i].name.c_str(), players[i].setsFound);
+                ImGui::SameLine();
+                if (ImGui::Button("Remove")) {
+                    game.removePlayer(i);
+                    break;
+                }
+                ImGui::PopID();
+            }
+
+            // Current player selection
+            if (!players.empty()) {
+                ImGui::Separator();
+                int currentPlayerIndex = game.getCurrentPlayerIndex();
+                ImGui::Text("Current Player: %s", 
+                    currentPlayerIndex >= 0 ? players[currentPlayerIndex].name.c_str() : "None");
+            }
+
+            if (ImGui::Button("Close")) {
+                showPlayerManager = false;
+            }
+            ImGui::EndPopup();
+        }
 
         // Add stats display
         const auto& stats = game.getStats();
@@ -363,14 +516,6 @@ int main() {
 
         if (ImGui::Button("Find All SETs")) {
             currentSets = game.findAllSets();
-        }
-
-        ImGui::SameLine();
-        if (ImGui::Button("New Game")) {
-            game = SetGame();
-            currentSets.clear();
-            selectedCardIndex = -1;
-            selectedCards.clear();
         }
 
         ImGui::SameLine();
@@ -389,9 +534,35 @@ int main() {
 
         ImGui::Separator();
 
-        // Display deck size
+        // Display deck size and sets on board
         ImGui::Text("Cards in Deck: %zu", game.getDeckSize());
-        ImGui::Text("Sets on Board: %zu", currentSets.size());
+        ImGui::Text("Sets on Board: %d", game.getSetsOnBoard());
+
+        // Player section
+        const auto& players = game.getPlayers();
+        if (!players.empty()) {
+            ImGui::Separator();
+            ImGui::Text("Players:");
+            for (size_t i = 0; i < players.size(); ++i) {
+                ImGui::SameLine();
+                ImGui::PushID(i);
+                bool isCurrentPlayer = (int)i == game.getCurrentPlayerIndex();
+                ImGuiStyle& style = ImGui::GetStyle();
+                ImVec4 originalColor = style.Colors[ImGuiCol_Button];
+                
+                if (isCurrentPlayer) {
+                    style.Colors[ImGuiCol_Button] = ImVec4(0.0f, 1.0f, 0.0f, 0.5f);
+                }
+                
+                if (ImGui::Button(players[i].name.c_str())) {
+                    // Optional: Add player-specific actions if needed
+                }
+                
+                // Restore original button color
+                style.Colors[ImGuiCol_Button] = originalColor;
+                ImGui::PopID();
+            }
+        }
 
         // Handle manual set selection
         if (!editMode) {
@@ -399,9 +570,9 @@ int main() {
         }
 
         const auto& board = game.getBoard();
-        float cardWidth = 93 * 1.5f;
-        float cardHeight = 53 * 1.5f;
-        float padding = 20;
+        float cardWidth = 93 * globalScale;
+        float cardHeight = 53 * globalScale;
+        float padding = 20 * globalScale;
 
         // Render board
         for (size_t i = 0; i < board.size(); i++) {
@@ -500,6 +671,7 @@ int main() {
         glfwSwapBuffers(window);
     }
 
+    // Cleanup
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
