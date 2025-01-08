@@ -4,7 +4,8 @@
 
 SET Game Solver is an interactive desktop application that helps players analyze and play the classic card game SET. The game challenges players to find "sets" of cards based on four attributes: shape, color, number, and shading.
 
-![SET Game Screenshot](![image](https://github.com/user-attachments/assets/7067b7e3-4d34-4411-8492-cb60cb6f64dc)
+![image](https://github.com/user-attachments/assets/a49b6452-105b-4ccf-ac58-260215266903)
+
 
 ## Features
 
